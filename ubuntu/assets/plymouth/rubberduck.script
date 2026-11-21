@@ -1,0 +1,14 @@
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+logo.image = Image("rubberduckFinal.png");
+
+# Scale the logo to at most half of the screen height, keeping its aspect ratio.
+scale = Window.GetHeight() * 0.5 / logo.image.GetHeight();
+if (scale > 1) scale = 1;
+logo.image = logo.image.Scale(logo.image.GetWidth() * scale, logo.image.GetHeight() * scale);
+
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2);
+logo.sprite.SetY(Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2);
+logo.sprite.SetOpacity(1);

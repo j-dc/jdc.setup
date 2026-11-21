@@ -7,7 +7,8 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 echo "This script prepares Ubuntu 26.04 as a developer machine."
-echo "It installs: PowerShell, git, .NET SDK 10 and 11, Docker, VS Code, Microsoft Edge,"
+echo "It installs: PowerShell, Oh My Posh, git, .NET SDK 10 and 11, Docker, VS Code, Microsoft Edge, Remmina and Krita,"
+echo "a boot splash with the rubber duck logo,"
 echo "a Copilot app shortcut, and starts Portainer. You may be asked for your sudo password."
 
 echo "Checking prerequisites (regular user, Ubuntu 26.04, amd64, portainer folder)..."
@@ -78,8 +79,35 @@ printf '%s\n' \
 echo "Updating package lists..."
 sudo apt-get update
 
-step "Installing base tools: ca-certificates, curl, powershell, gnupg, git"
-install_missing ca-certificates curl powershell gnupg git
+step "Installing base tools: ca-certificates, curl, unzip, powershell, gnupg, git"
+install_missing ca-certificates curl unzip powershell gnupg git
+
+step "Installing and configuring Oh My Posh for Bash and PowerShell"
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+
+if grep -qF 'oh-my-posh init bash' "$HOME/.bashrc" 2>/dev/null; then
+    echo "Oh My Posh is already configured in ~/.bashrc."
+else
+    echo "Adding Oh My Posh to ~/.bashrc (open a new terminal to use it)."
+    cat >> "$HOME/.bashrc" <<'EOF2'
+
+# Oh My Posh
+export PATH="$HOME/.local/bin:$PATH"
+eval "$(oh-my-posh init bash)"
+EOF2
+fi
+
+pwsh -NoProfile -Command '
+$profileDirectory = Split-Path -Parent $PROFILE
+New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
+if (-not (Test-Path $PROFILE) -or -not (Select-String -Path $PROFILE -SimpleMatch -Quiet -Pattern "oh-my-posh init pwsh")) {
+    Add-Content -Path $PROFILE -Value "`n`$env:PATH = `"`$HOME/.local/bin:`$env:PATH`"`noh-my-posh init pwsh | Invoke-Expression"
+    Write-Output "Added Oh My Posh to $PROFILE."
+} else {
+    Write-Output "Oh My Posh is already configured in $PROFILE."
+}
+'
 
 step "Checking the global git identity (user.name and user.email)"
 for key in user.name user.email; do
@@ -146,10 +174,28 @@ EOF
 echo "Updating package lists..."
 sudo apt-get update
 
-step "Installing Docker, VS Code and Microsoft Edge"
-install_missing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin code microsoft-edge-stable
+step "Installing Docker, VS Code, Microsoft Edge, Remmina and Krita"
+install_missing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin code microsoft-edge-stable remmina krita
 echo "Enabling and starting the Docker service..."
 sudo systemctl enable --now docker
+
+step "Installing the Rubberduck boot splash (Plymouth theme)"
+plymouth_assets="$script_dir/assets/plymouth"
+plymouth_logo="$script_dir/assets/rubberduckFinal.png"
+plymouth_theme_dir=/usr/share/plymouth/themes/rubberduck
+if [ ! -f "$plymouth_logo" ] || [ ! -f "$plymouth_assets/rubberduck.plymouth" ] || [ ! -f "$plymouth_assets/rubberduck.script" ]; then
+    echo "Missing the Plymouth theme files in $script_dir/assets." >&2
+    exit 1
+fi
+install_missing plymouth plymouth-theme-spinner
+echo "Copying the theme and logo to $plymouth_theme_dir..."
+sudo install -d -m 0755 "$plymouth_theme_dir"
+sudo install -m 0644 "$plymouth_assets/rubberduck.plymouth" "$plymouth_assets/rubberduck.script" "$plymouth_logo" "$plymouth_theme_dir/"
+echo "Selecting the Rubberduck theme as the default boot splash..."
+sudo update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth "$plymouth_theme_dir/rubberduck.plymouth" 200
+sudo update-alternatives --set default.plymouth "$plymouth_theme_dir/rubberduck.plymouth"
+echo "Rebuilding the initramfs (this can take a minute)..."
+sudo update-initramfs -u
 
 step "Creating the Copilot app shortcut with its icon"
 desktop_file="$script_dir/assets/copilot.desktop"

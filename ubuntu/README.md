@@ -7,10 +7,12 @@ On a fresh Ubuntu 26.04 amd64 installation, keep this directory alongside
 bash ubuntu/setup.sh
 ```
 
-The setup installs PowerShell, Git, curl, .NET 10 SDK, Docker Engine and Compose,
-VS Code, and Microsoft Edge, then starts the existing Portainer stack. Packages
-are installed from Ubuntu, Docker, and Microsoft repositories and can be updated
-with APT. Run the same command again to retry after an error.
+The setup installs PowerShell, Oh My Posh for Bash and PowerShell, Git, curl,
+.NET 10 SDK, Docker Engine and Compose, VS Code, Microsoft Edge, and Remmina,
+then starts the existing Portainer stack. Oh My Posh is configured in
+`~/.bashrc` and the PowerShell profile. Packages are installed from Ubuntu,
+Docker, and Microsoft repositories and can be updated with APT. Run the same
+command again to retry after an error.
 
 Already installed APT packages are skipped. Existing Portainer containers are
 preserved and started if stopped; missing services are created.
