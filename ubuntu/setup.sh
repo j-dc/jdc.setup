@@ -58,7 +58,39 @@ printf '%s\n' \
     'deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft-prod.asc] https://packages.microsoft.com/ubuntu/26.04/prod resolute main' \
     | sudo tee /etc/apt/sources.list.d/developer-microsoft-prod.list > /dev/null
 sudo apt-get update
-install_missing ca-certificates curl powershell gnupg git dotnet-sdk-10.0
+install_missing ca-certificates curl powershell gnupg git
+
+for key in user.name user.email; do
+    if [ -z "$(git config --global --get "$key" || true)" ]; then
+        value=
+        while [ -z "$value" ]; do
+            read -r -p "Git $key is not set. Enter a value: " value
+        done
+        git config --global "$key" "$value"
+        echo "Git $key set to: $value"
+    else
+        echo "Git $key is set."
+    fi
+done
+
+# Ubuntu's archive only ships .NET 10 and Microsoft's repo has no .NET SDK for 26.04,
+# so all .NET SDKs are installed the same way: with the official dotnet-install script.
+dotnet_root="$HOME/.dotnet"
+dotnet_install_script="$(mktemp)"
+
+curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$dotnet_install_script"
+for channel in 10.0 11.0; do
+    echo "Installing .NET SDK $channel"
+    echo "----------------------------"
+    bash "$dotnet_install_script" --channel "$channel" --install-dir "$dotnet_root"
+done
+rm -f "$dotnet_install_script"
+if ! grep -qF 'DOTNET_ROOT="$HOME/.dotnet"' "$HOME/.bashrc" 2>/dev/null; then
+    cat >> "$HOME/.bashrc" <<'EOF2'
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
+EOF2
+fi
 
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/developer-docker.asc
 sudo curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /etc/apt/keyrings/developer-microsoft.asc
