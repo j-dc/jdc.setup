@@ -7,7 +7,7 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 echo "This script prepares Ubuntu 26.04 as a developer machine."
-echo "It installs: PowerShell, Oh My Posh, git, .NET SDK 10 and 11, Docker, VS Code, Microsoft Edge, Remmina and Krita,"
+echo "It installs: PowerShell, Oh My Posh, GitHub CLI, git, .NET SDK 10 and 11, Docker, VS Code, Microsoft Edge, Remmina and Krita,"
 echo "a boot splash with the rubber duck logo,"
 echo "a Copilot app shortcut, and starts Portainer. You may be asked for your sudo password."
 
@@ -26,6 +26,14 @@ script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 compose_file="$script_dir/../portainer/compose.yaml"
 if [ ! -f "$compose_file" ]; then
     echo "The sibling portainer directory is required." >&2
+    exit 1
+fi
+if ! command -v curl > /dev/null && ! command -v wget > /dev/null; then
+    echo "Either curl or wget is required to add package repositories." >&2
+    exit 1
+fi
+if [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+    echo "A system CA certificate bundle is required to download package repository keys." >&2
     exit 1
 fi
 
@@ -52,6 +60,14 @@ install_missing() {
     fi
 }
 
+download() {
+    if command -v curl > /dev/null; then
+        curl -fsSL "$1"
+    else
+        wget -nv -O - "$1"
+    fi
+}
+
 echo "Prerequisites OK."
 
 step "Checking for packages that conflict with Docker CE"
@@ -63,28 +79,80 @@ for package in docker.io docker-compose docker-compose-v2 docker-doc docker-buil
 done
 echo "No conflicting packages found."
 
-step "Adding the Microsoft package repository (PowerShell)"
-if [ ! -f /etc/apt/sources.list.d/developer-microsoft-prod.list ]; then
-    echo "Installing the tools needed to add the repository..."
-    sudo apt-get update
-    install_missing ca-certificates curl
-fi
-
+step "Adding the Microsoft, GitHub CLI, Docker, VS Code and Microsoft Edge package repositories"
 sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://packages.microsoft.com/keys/microsoft-2025.asc -o /etc/apt/keyrings/developer-microsoft-prod.asc
+download https://packages.microsoft.com/keys/microsoft-2025.asc | sudo tee /etc/apt/keyrings/developer-microsoft-prod.asc > /dev/null
 sudo chmod 0644 /etc/apt/keyrings/developer-microsoft-prod.asc
 printf '%s\n' \
     'deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft-prod.asc] https://packages.microsoft.com/ubuntu/26.04/prod resolute main' \
     | sudo tee /etc/apt/sources.list.d/developer-microsoft-prod.list > /dev/null
+
+download https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+sudo chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg
+printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+    "$(dpkg --print-architecture)" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+download https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/developer-docker.asc > /dev/null
+download https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/keyrings/developer-microsoft.asc > /dev/null
+sudo chmod 0644 /etc/apt/keyrings/developer-docker.asc /etc/apt/keyrings/developer-microsoft.asc
+
+sudo tee /etc/apt/sources.list.d/developer-docker.sources > /dev/null <<'EOF'
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: resolute
+Components: stable
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/developer-docker.asc
+EOF
+sudo tee /etc/apt/sources.list.d/developer-vscode.sources > /dev/null <<'EOF'
+Types: deb
+URIs: https://packages.microsoft.com/repos/code
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/developer-microsoft.asc
+EOF
+sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft.asc] https://packages.microsoft.com/repos/edge stable main
+EOF
+
 echo "Updating package lists..."
 sudo apt-get update
 
-step "Installing base tools: ca-certificates, curl, unzip, powershell, gnupg, git"
-install_missing ca-certificates curl unzip powershell gnupg git
+step "Installing base tools: ca-certificates, curl, unzip, fontconfig, powershell, gnupg, git, gh"
+install_missing ca-certificates curl unzip fontconfig powershell gnupg git gh
+
+step "Checking GitHub authentication and private repository access"
+if ! gh auth status --hostname github.com > /dev/null 2>&1; then
+    echo "GitHub CLI is not authenticated. Starting browser sign-in..."
+    gh auth login --hostname github.com --git-protocol https --web --scopes repo
+fi
+gh auth status --hostname github.com > /dev/null
+gh auth setup-git --hostname github.com
+
+if ! private_repo="$(gh api --hostname github.com -X GET user/repos -f visibility=private -F per_page=1 --jq '.[0].full_name // empty')"; then
+    echo "Could not list private GitHub repositories. Check that this account can access private repositories." >&2
+    exit 1
+fi
+if [ -z "$private_repo" ]; then
+    echo "No private GitHub repositories are accessible to this account. Check account permissions and the GitHub token's 'repo' scope." >&2
+    exit 1
+fi
+
+git_test_dir="$(mktemp -d)"
+if ! GIT_TERMINAL_PROMPT=0 git -C "$git_test_dir" ls-remote --quiet "https://github.com/$private_repo.git" HEAD > /dev/null; then
+    rmdir "$git_test_dir"
+    echo "Git could not access private repository '$private_repo'. Check the GitHub credentials and repository permissions." >&2
+    exit 1
+fi
+rmdir "$git_test_dir"
+echo "GitHub login and private repository access verified."
 
 step "Installing and configuring Oh My Posh for Bash and PowerShell"
 mkdir -p "$HOME/.local/bin"
 curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+"$HOME/.local/bin/oh-my-posh" font install meslo
 
 if grep -qF 'oh-my-posh init bash' "$HOME/.bashrc" 2>/dev/null; then
     echo "Oh My Posh is already configured in ~/.bashrc."
@@ -145,34 +213,6 @@ export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
 EOF2
 fi
-
-step "Adding the Docker, VS Code and Microsoft Edge package repositories"
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/developer-docker.asc
-sudo curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /etc/apt/keyrings/developer-microsoft.asc
-sudo chmod 0644 /etc/apt/keyrings/developer-docker.asc /etc/apt/keyrings/developer-microsoft.asc
-
-sudo tee /etc/apt/sources.list.d/developer-docker.sources > /dev/null <<'EOF'
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: resolute
-Components: stable
-Architectures: amd64
-Signed-By: /etc/apt/keyrings/developer-docker.asc
-EOF
-sudo tee /etc/apt/sources.list.d/developer-vscode.sources > /dev/null <<'EOF'
-Types: deb
-URIs: https://packages.microsoft.com/repos/code
-Suites: stable
-Components: main
-Architectures: amd64
-Signed-By: /etc/apt/keyrings/developer-microsoft.asc
-EOF
-sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null <<'EOF'
-deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft.asc] https://packages.microsoft.com/repos/edge stable main
-EOF
-
-echo "Updating package lists..."
-sudo apt-get update
 
 step "Installing Docker, VS Code, Microsoft Edge, Remmina and Krita"
 install_missing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin code microsoft-edge-stable remmina krita
