@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Copilot
+Exec=microsoft-edge --app=https://copilot.cloud.microsoft/chat
+Terminal=false
+Type=Application
+Icon=copilot
+Categories=Network;
+StartupWMClass=microsoft.cloud.copilot.chat

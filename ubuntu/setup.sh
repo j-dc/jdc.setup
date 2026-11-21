@@ -6,6 +6,11 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 
+echo "This script prepares Ubuntu 26.04 as a developer machine."
+echo "It installs: PowerShell, git, .NET SDK 10 and 11, Docker, VS Code, Microsoft Edge,"
+echo "a Copilot app shortcut, and starts Portainer. You may be asked for your sudo password."
+
+echo "Checking prerequisites (regular user, Ubuntu 26.04, amd64, portainer folder)..."
 . /etc/os-release
 if [ "$ID" != ubuntu ] || [ "$VERSION_ID" != 26.04 ]; then
     echo "This setup supports Ubuntu 26.04 only." >&2
@@ -23,6 +28,13 @@ if [ ! -f "$compose_file" ]; then
     exit 1
 fi
 
+step_number=0
+step() {
+    step_number=$((step_number + 1))
+    echo
+    echo "==> Step $step_number: $*"
+}
+
 install_missing() {
     local package status
     local -a missing=()
@@ -39,14 +51,20 @@ install_missing() {
     fi
 }
 
+echo "Prerequisites OK."
+
+step "Checking for packages that conflict with Docker CE"
 for package in docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc; do
     if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null)" = installed ]; then
         echo "Conflicting package '$package' is installed. Review Docker's installation instructions before replacing existing packages." >&2
         exit 1
     fi
 done
+echo "No conflicting packages found."
 
+step "Adding the Microsoft package repository (PowerShell)"
 if [ ! -f /etc/apt/sources.list.d/developer-microsoft-prod.list ]; then
+    echo "Installing the tools needed to add the repository..."
     sudo apt-get update
     install_missing ca-certificates curl
 fi
@@ -57,9 +75,13 @@ sudo chmod 0644 /etc/apt/keyrings/developer-microsoft-prod.asc
 printf '%s\n' \
     'deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft-prod.asc] https://packages.microsoft.com/ubuntu/26.04/prod resolute main' \
     | sudo tee /etc/apt/sources.list.d/developer-microsoft-prod.list > /dev/null
+echo "Updating package lists..."
 sudo apt-get update
+
+step "Installing base tools: ca-certificates, curl, powershell, gnupg, git"
 install_missing ca-certificates curl powershell gnupg git
 
+step "Checking the global git identity (user.name and user.email)"
 for key in user.name user.email; do
     if [ -z "$(git config --global --get "$key" || true)" ]; then
         value=
@@ -73,6 +95,7 @@ for key in user.name user.email; do
     fi
 done
 
+step "Installing .NET SDKs 10.0 and 11.0 into ~/.dotnet"
 # Ubuntu's archive only ships .NET 10 and Microsoft's repo has no .NET SDK for 26.04,
 # so all .NET SDKs are installed the same way: with the official dotnet-install script.
 dotnet_root="$HOME/.dotnet"
@@ -85,13 +108,17 @@ for channel in 10.0 11.0; do
     bash "$dotnet_install_script" --channel "$channel" --install-dir "$dotnet_root"
 done
 rm -f "$dotnet_install_script"
-if ! grep -qF 'DOTNET_ROOT="$HOME/.dotnet"' "$HOME/.bashrc" 2>/dev/null; then
+if grep -qF 'DOTNET_ROOT="$HOME/.dotnet"' "$HOME/.bashrc" 2>/dev/null; then
+    echo "DOTNET_ROOT and PATH are already configured in ~/.bashrc."
+else
+    echo "Adding DOTNET_ROOT and PATH to ~/.bashrc (open a new terminal to use them)."
     cat >> "$HOME/.bashrc" <<'EOF2'
 export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
 EOF2
 fi
 
+step "Adding the Docker, VS Code and Microsoft Edge package repositories"
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/developer-docker.asc
 sudo curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /etc/apt/keyrings/developer-microsoft.asc
 sudo chmod 0644 /etc/apt/keyrings/developer-docker.asc /etc/apt/keyrings/developer-microsoft.asc
@@ -116,11 +143,30 @@ sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null <<'EOF'
 deb [arch=amd64 signed-by=/etc/apt/keyrings/developer-microsoft.asc] https://packages.microsoft.com/repos/edge stable main
 EOF
 
+echo "Updating package lists..."
 sudo apt-get update
+
+step "Installing Docker, VS Code and Microsoft Edge"
 install_missing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin code microsoft-edge-stable
+echo "Enabling and starting the Docker service..."
 sudo systemctl enable --now docker
 
-echo 'Starting Portainer. Its proxy publishes unencrypted HTTP on port 80.'
+step "Creating the Copilot app shortcut with its icon"
+desktop_file="$script_dir/assets/copilot.desktop"
+icon_file="$script_dir/assets/copilot.png"
+if [ ! -f "$desktop_file" ] || [ ! -f "$icon_file" ]; then
+    echo "Missing $desktop_file or $icon_file." >&2
+    exit 1
+fi
+# The icon is the 48x48 favicon of copilot.cloud.microsoft.
+mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/48x48/apps"
+install -m 0644 "$icon_file" "$HOME/.local/share/icons/hicolor/48x48/apps/copilot.png"
+gtk-update-icon-cache -q -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+install -m 0755 "$desktop_file" "$HOME/.local/share/applications/copilot.desktop"
+echo "Shortcut installed in ~/.local/share/applications/copilot.desktop."
+
+step "Starting Portainer"
+echo 'Its proxy publishes unencrypted HTTP on port 80.'
 services="$(sudo docker compose -f "$compose_file" config --services)"
 if [ -z "$services" ]; then
     echo 'The Portainer Compose file has no services.' >&2
@@ -139,7 +185,10 @@ while IFS= read -r service; do
         fi
     fi
 done <<< "$services"
+echo "Waiting for Portainer to answer on http://portainer.localtest.me/ ..."
 curl -fsS --noproxy portainer.localtest.me --resolve portainer.localtest.me:80:127.0.0.1 \
     --retry 10 --retry-connrefused --retry-delay 2 --output /dev/null http://portainer.localtest.me/
+echo
+echo '==> Done.'
 echo 'Setup complete. Open http://portainer.localtest.me/ on this machine.'
 echo 'Use sudo for Docker commands, or configure Docker access separately.'
