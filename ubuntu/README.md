@@ -16,6 +16,13 @@ Portainer stack. Oh My Posh is configured in `~/.bashrc` and the PowerShell
 profile. Select `MesloLGM Nerd Font` in your terminal's font settings to display
 Oh My Posh icons.
 
+The setup checks `~/.ssh` for an existing key pair. If none is found, you can
+skip SSH setup, import private and public key files exported from Bitwarden, or
+generate an Ed25519 key. Imported keys are checked for a match and stored as
+`~/.ssh/id_ed25519` and `~/.ssh/id_ed25519.pub`; existing files at those paths
+are never overwritten. Remove the exported private key file securely when it
+is no longer needed. Register the public key with any SSH service you use.
+
 The setup checks GitHub CLI authentication, starts browser sign-in if needed,
 configures Git to use GitHub CLI for HTTPS credentials, and verifies private
 repository access with `git ls-remote` against the first accessible private

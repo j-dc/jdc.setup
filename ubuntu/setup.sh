@@ -120,8 +120,76 @@ EOF
 echo "Updating package lists..."
 sudo apt-get update
 
-step "Installing base tools: ca-certificates, curl, unzip, fontconfig, powershell, gnupg, git, gh"
-install_missing ca-certificates curl unzip fontconfig powershell gnupg git gh
+step "Installing base tools: ca-certificates, curl, unzip, fontconfig, powershell, gnupg, git, gh, openssh-client"
+install_missing ca-certificates curl unzip fontconfig powershell gnupg git gh openssh-client
+
+step "Checking for an SSH key pair"
+ssh_dir="$HOME/.ssh"
+ssh_key="$ssh_dir/id_ed25519"
+ssh_pair_found=false
+for public_key in "$ssh_dir"/*.pub; do
+    case "$public_key" in *-cert.pub) continue ;; esac
+    if [ -f "$public_key" ] && [ -f "${public_key%.pub}" ] && ssh-keygen -lf "$public_key" > /dev/null 2>&1; then
+        echo "SSH key pair found: ${public_key%.pub}"
+        ssh_pair_found=true
+        break
+    fi
+done
+
+if [ "$ssh_pair_found" = false ]; then
+    echo "No SSH key pair found in ~/.ssh."
+    echo "1) Skip SSH key setup"
+    echo "2) Import key files exported from Bitwarden"
+    echo "3) Generate a new Ed25519 key"
+    while true; do
+        read -r -p "Choose an option [1-3]: " ssh_choice
+        case "$ssh_choice" in
+            1) echo "Skipping SSH key setup."; break ;;
+            2|3) break ;;
+            *) echo "Choose 1, 2 or 3." ;;
+        esac
+    done
+
+    if [ "$ssh_choice" = 2 ] || [ "$ssh_choice" = 3 ]; then
+        mkdir -p -m 0700 "$ssh_dir"
+        if [ -e "$ssh_key" ] || [ -L "$ssh_key" ] || [ -e "$ssh_key.pub" ] || [ -L "$ssh_key.pub" ]; then
+            echo "Cannot create $ssh_key: the private or public key path already exists. Move it manually before retrying." >&2
+            exit 1
+        fi
+
+        if [ "$ssh_choice" = 2 ]; then
+            read -r -p "Path to the exported private key: " private_key_source
+            read -r -p "Path to the exported public key: " public_key_source
+            (
+                umask 077
+                import_dir="$(mktemp -d "$ssh_dir/.import-XXXXXX")"
+                trap 'rm -f -- "$import_dir/private" "$import_dir/public" "$import_dir/derived.pub"; rmdir -- "$import_dir"' EXIT
+                install -m 0600 -- "$private_key_source" "$import_dir/private"
+                install -m 0644 -- "$public_key_source" "$import_dir/public"
+                if ! ssh-keygen -y -f "$import_dir/private" > "$import_dir/derived.pub"; then
+                    echo "Could not read the private key." >&2
+                    exit 1
+                fi
+                if ! derived_fingerprint="$(ssh-keygen -lf "$import_dir/derived.pub" | awk '{print $2}')" ||
+                    ! public_fingerprint="$(ssh-keygen -lf "$import_dir/public" | awk '{print $2}')" ||
+                    [ "$derived_fingerprint" != "$public_fingerprint" ]; then
+                    echo "The public key is invalid or does not match the private key." >&2
+                    exit 1
+                fi
+                ln -T -- "$import_dir/private" "$ssh_key"
+                if ! ln -T -- "$import_dir/public" "$ssh_key.pub"; then
+                    rm -f -- "$ssh_key"
+                    echo "Could not install the public key; the imported private key was removed." >&2
+                    exit 1
+                fi
+            )
+            echo "SSH key pair imported to $ssh_key."
+        else
+            ssh-keygen -t ed25519 -f "$ssh_key"
+            echo "SSH key pair generated at $ssh_key."
+        fi
+    fi
+fi
 
 step "Checking GitHub authentication and private repository access"
 if ! gh auth status --hostname github.com > /dev/null 2>&1; then
